@@ -1,3 +1,4 @@
+*.DS_Store*
 # Prerequisites
 *.d
 
@@ -50,3 +51,12 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+local/build/
+remote/build/
+local/main/auth.h
+remote/main/auth.h
+*.jpg
+
+
+
