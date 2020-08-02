@@ -8,31 +8,24 @@
 #include <pins_arduino.h>
 #include <heltec.h>
 #include <Adafruit_VC0706.h>
-#include <WiFi.h>
-#include "HTTPClient.h"
-
-// Wifi details & server for uploads
-#include "auth.h"
-const char * ssid = WIFI_SSID ;
-const char * password = WIFI_PASS ;
-const char * put_url = "http://192.168.0.3:8000/image_remote.jpg";
 
 #define BAND 915E6 // 868E6 433E6 915E6 
 #define MAX_TRANSFER_BUFFER 100000 // on these boards we have another 160KB to work with if we need it, after this
 #define LORA_TRANSFER_BUFFER 250 // has to be 254 or less
+#define PIC_EVERY_MS 60000
+#define SEND_REPEAT 5
+
+void takePicture();
+
 unsigned int counter = 0;
 Adafruit_VC0706 * cam;
 uint8_t * transfer_buffer;
 uint8_t * lora_buffer;
+uint16_t content_length = 0;
+long lastPicTime = 0;
 
 void setup() {
 	Heltec.begin(true /*Display */, true /* LoRa */, true /* Serial */, true /* PABOOST */, BAND);
-	// Set up WIFI 
-	WiFi.begin(ssid, password);
-	while(WiFi.status() != WL_CONNECTED) {
-		delay(500);
-	}
-	Serial.println("wifi online"); 
 
 	// Set up the camera.  
 	// purple on 17, grey on 23, blue on 5V, white on GN
@@ -68,6 +61,10 @@ void setup() {
 	LoRa.setTxPower(20,RF_PACONFIG_PASELECT_PABOOST);
 	LoRa.setSignalBandwidth(250E3); 
 	LoRa.setSpreadingFactor(7);
+
+	// take a first picture
+	lastPicTime = millis();
+	takePicture();
 }
 
 // Debug time taken to do things 
@@ -82,96 +79,111 @@ void print_time(char * title, uint16_t length, long time) {
 	Serial.println(" bytes/second.");
 }
 
-void put_to_lora(uint8_t *buf, uint16_t length) {
-	uint16_t idx = 0;    
-	// First send a "hey, a picture!!!" packet of a known length and content
-	lora_buffer[0] = 0x35;
-	lora_buffer[1] = 0xFA;
-	LoRa.beginPacket();
-	LoRa.write(lora_buffer, 2);
-	LoRa.endPacket();
-	delay(500);
-	// Now the whole dingus  
-	uint8_t packet_counter = 0;
-	long time = millis();
-	while(length > 0) {
-		uint8_t bytesToSend = min((uint16_t)LORA_TRANSFER_BUFFER, length);
-		lora_buffer[0] = packet_counter;
-		for(int j=0;j<bytesToSend;j++) {
-			lora_buffer[j+1] = buf[idx++]; 
-		}
-		LoRa.beginPacket();
-		LoRa.write(lora_buffer, bytesToSend+1);  
-		LoRa.endPacket();
-		packet_counter++;
-		length -= bytesToSend;      
-		delay(500); // slow it down to let the receiver catch it 
-	}
-	print_time("LoRa  ", idx, time);
-	// Now send an all done packet
-	lora_buffer[0] = 0x35;
-	lora_buffer[1] = 0xDA;
-	LoRa.beginPacket();
-	LoRa.write(lora_buffer, 2);
-	LoRa.endPacket();
-}
 
-void put_to_server(uint8_t * buf, uint16_t length) {
-	HTTPClient http;
-	long time = millis();
-	http.begin(put_url);
-	http.addHeader("Content-Type", "image/jpg");
-	http.addHeader("Content-Length", String(length));
-	http.PUT(buf,length); 
-	http.end();
-	print_time("server", length, time);
-}
 
-void loop() { 
+// Take a picture and load it into transfer bffer
+void takePicture() {
+	Serial.println("taking pic");
 	if(cam->takePicture()) {
 		delay(100);
-		uint32_t jpglen = cam->frameLength();
+		uint16_t jpglen = cam->frameLength();
 		delay(100);
 		log_d("jpglen is %d\n", jpglen);
 		long time = millis();
 		// The camera has a tiny (100 byte) buffer for transfers, so we read a bit at a time into ESP ram
 		// Takes about 20 seconds, but keeping this at 38400 as it's fiddly and that is not the slow part!
 		uint16_t idx = 0;
-		uint32_t content_length = jpglen; // save this off
-		if(content_length < MAX_TRANSFER_BUFFER) {
-			while(jpglen > 0) {
-				uint8_t bytesToRead = min((uint32_t)64, jpglen);
-				uint8_t * camera_buffer = cam->readPicture(bytesToRead);
-				if(camera_buffer) {
-					for(int j=0;j<bytesToRead;j++) {
-						transfer_buffer[idx++] = camera_buffer[j];
-					}
-					jpglen -= bytesToRead;      
-				} else {
-					log_e("problem reading data from camera -- read %d bytes\n", idx);
-					delay(100);
+		content_length = jpglen; // save this off
+		while(jpglen > 0) {
+			uint8_t bytesToRead = min((uint16_t)64, jpglen);
+			uint8_t * camera_buffer = cam->readPicture(bytesToRead);
+			if(camera_buffer) {
+				for(int j=0;j<bytesToRead;j++) {
+					transfer_buffer[idx++] = camera_buffer[j];
 				}
+				jpglen -= bytesToRead;      
+			} else {
+				log_e("problem reading data from camera -- read %d bytes\n", idx);
+				delay(100);
 			}
-			print_time("camera", content_length, time);
-			put_to_server(transfer_buffer, content_length);
-			put_to_lora(transfer_buffer, content_length);
-		} else {
-			Serial.println("buffer too big");
 		}
+		print_time("camera", content_length, time);
 		// Restart the camera
 		cam->resumeVideo();
 	} else {
 		Serial.println("Couldn't take pic");
 	}
-	Heltec.display->clear();
-	Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
-	Heltec.display->setFont(ArialMT_Plain_10);
-	Heltec.display->drawString(0, 0, "Sending packet: ");
-	Heltec.display->drawString(90, 0, String(counter));
-	Heltec.display->display();
+}
 
-	counter++;
-	delay(30000);
+void loop() { 
+	// my loop is ... check for inbound packets a lot... but if you don't get one for 60s, take a picture
+	int packetSize = LoRa.parsePacket();
+	if(packetSize == 2) {
+		uint8_t a = LoRa.read();
+		uint8_t b = LoRa.read();
+		delay(20);
+		if(a==0xF9 && b==0xFC) {
+			Serial.println("rft received");
+			delay(100);
+			uint8_t packets = content_length / LORA_TRANSFER_BUFFER;
+			if(content_length % LORA_TRANSFER_BUFFER != 0) packets++;
+			Serial.print("Content len / buffer count is ");
+			Serial.println(packets);
+			lora_buffer[0] = 0xF9;
+			lora_buffer[1] = 0xC2;
+			lora_buffer[2] = packets;
+			uint8_t send_repeat = SEND_REPEAT;
+			while(send_repeat-- > 0) {
+				LoRa.beginPacket();
+				LoRa.write(lora_buffer, 3);
+				LoRa.endPacket();
+				delay(20);
+			}
+			LoRa.receive();
+		}
+	} else if (packetSize == 3) { // request for packet
+		uint8_t a = LoRa.read();
+		uint8_t b = LoRa.read();
+		uint8_t c = LoRa.read();
+		if(a==0xF9 && b==0xFD) {
+			Serial.print("packet was requested: ");
+			Serial.println(c);
+			uint16_t byte_start = LORA_TRANSFER_BUFFER * c;
+			uint8_t bytes_to_send = LORA_TRANSFER_BUFFER;
+			if(c == (content_length / LORA_TRANSFER_BUFFER) - 1) { // if it's last packet
+				Serial.print("last packet so ");
+				bytes_to_send = content_length % LORA_TRANSFER_BUFFER;
+				Serial.println(bytes_to_send);
+			}
+			// Send the "which packet is this" guy
+			Serial.println("Sending packet");
+			lora_buffer[0] = c;
+			for(uint16_t i=byte_start;i<byte_start+bytes_to_send;i++) {
+				//printf("putting byte %d in lora_buffer position %d, c is %d bytes_to_send %d i is %d\n", 
+				//	transfer_buffer[i], i-byte_start+1, c, bytes_to_send, i);
+				lora_buffer[i-byte_start+1] = transfer_buffer[i];
+			}
+			Serial.println("filled send buffer");
+			delay(100);
+
+			uint8_t send_repeat = 1;
+			while(send_repeat-- > 0) {
+				LoRa.beginPacket();
+				LoRa.write(lora_buffer, bytes_to_send+1);
+				LoRa.endPacket();
+				Serial.println("send actual packet");
+				delay(20);
+			}
+			Serial.println("waiting around for more commands");
+			LoRa.receive();
+		} 
+	}
+	if(millis() - lastPicTime > PIC_EVERY_MS) {
+		lastPicTime = millis();
+		takePicture();
+	}
+	delay(20);
+
 }
 
 extern "C" {
