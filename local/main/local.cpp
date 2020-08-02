@@ -21,6 +21,7 @@ const char * put_url = "http://192.168.0.3:8000/image_local.jpg";
 #define LORA_TRANSFER_BUFFER 250 // has to be 254 or less
 #define REQUEST_TIMER 200
 #define RESPONSE_TIMER 200
+#define CHECK_EVERY_MS 45000
 unsigned int counter = 0;
 uint8_t * transfer_buffer;
 uint8_t * lora_buffer;
@@ -38,8 +39,7 @@ void setup() {
 	transfer_buffer = (uint8_t *) malloc(MAX_TRANSFER_BUFFER*sizeof(uint8_t));
 	lora_buffer = (uint8_t *) malloc(LORA_TRANSFER_BUFFER*sizeof(uint8_t));
 
-	Serial.print("Heap after malloc: ");
-	Serial.println(ESP.getFreeHeap());
+	printf("After malloc I have %d free heap\n", ESP.getFreeHeap());
 	Heltec.display->init();
 	Heltec.display->flipScreenVertically();  
 	Heltec.display->setFont(ArialMT_Plain_10);
@@ -59,14 +59,8 @@ void setup() {
 
 // Debug time taken to do things 
 void print_time(char * title, uint16_t length, long time) {
-	Serial.print(title);
-	Serial.print(": ");
-	Serial.print(length);
-	Serial.print(" bytes in ");
-	Serial.print((millis() - time) / 1000.0);
-	Serial.print(" seconds. ");
-	Serial.print((float)length / (float)(millis()-time) * 1000.0);
-	Serial.println(" bytes/second.");
+	printf("%s: %d bytes in %2.2fs. %2.2f bytes/s.\n", 
+		title, length, (millis() - time) / 1000.0, (float)length / (float)(millis()-time) * 1000.0  );
 }
 
 void put_to_server(uint8_t * buf, uint16_t length) {
@@ -99,13 +93,12 @@ uint8_t request_transmission() {
 		uint8_t response_timer = RESPONSE_TIMER;
 		lora_buffer[0] = 0xF9;
 		lora_buffer[1] = 0xFC;
-		Serial.println("Sending request for transmission 0xF9 0xFC");
+		printf("Sending request for transmission...\n");
 		LoRa.beginPacket();
 		LoRa.write(lora_buffer, 2);
 		LoRa.endPacket();
 		delay(20);
 		LoRa.receive();
-		Serial.println("Waiting for rft response (0xF9 0xC2)");
 		while(response_timer-- > 0) {
 			int packetSize = LoRa.parsePacket();
 			if(packetSize==3) {
@@ -113,48 +106,34 @@ uint8_t request_transmission() {
 				uint8_t b = LoRa.read();
 				uint8_t c = LoRa.read();
 				if(a == 0xF9 && b == 0xC2) {
-					Serial.print("Received rft response of ");
-					Serial.println(c);
+					printf("Receiving rft response, %d packets\n", c);
 					return c;
 				}
 			}
 			delay(20);
 		}
-		Serial.println("Receive timer timed out");
+		printf("Receive timer timed out\n");
 	}
-	Serial.println("Request timer timed out");
+	printf("Request timer timed out\n");
 	return 0;
 }
 
 
-// Let's refactor this. Instead of a thing streaming all the time, we have local initiate the request
-// Local sends a magic packet that asks
-// (1) is there anything there, and how long is it? 
-// (a) remote responds with # of packets available to send (0 is a number)
-// (2) Ok, ready for packet #0! 
-// (b) remote sends packet 0 on a loop until it gets an request for a new packet -- or something times out
-// (3) Ok, ready for packet #1! 
-// (c) remote sends packet 1...
-// (4) Oh, i need packet 0 again..
-// (d)  Sends packet 0
-
-// That's it, right? 
-
-uint16_t read_pointer = 0;
-uint8_t read_flag = 0;
-uint8_t packet_counter = 0;
-
+long lastCheckTime = 0;
 void loop() {
-	uint8_t packets = request_transmission();
+	uint8_t packets = 0;
+	if(millis() - lastCheckTime > CHECK_EVERY_MS) {
+		lastCheckTime = millis();
+		packets = request_transmission();
+	}
 	if(packets) {
-		Serial.print("Got back these many packets: ");
-		Serial.println(packets);
+		uint16_t read_pointer = 0;
+		long time = millis();
+		printf("Got back %d packets from the rft\n", packets);
 		for(uint8_t i=0;i<packets;i++) {
 			uint8_t request_timer = REQUEST_TIMER;
 			uint8_t ok = 0;
 			while(request_timer-- > 0 && !ok) {
-				Serial.print("requesting packet ");
-				Serial.println(i);
 				delay(100); // delay 100ms between packet requests
 				request_packet(i);
 				uint8_t response_timer = RESPONSE_TIMER;
@@ -163,34 +142,30 @@ void loop() {
 					if(packetSize) {
 						uint8_t packet_number = LoRa.read();
 						if(packet_number == 0xF9 && packetSize < 4) {
-							Serial.println("discarding magic packet");
+							printf("got magic packet, discarding\n");
 							delay(20);
 						} else {
-							Serial.print("got response, this is packet # ");
-							Serial.println(packet_number);
-							Serial.print("packet size was ");
-							Serial.println(packetSize);
+							printf("Response: packet #%d (asked for %d), size %d\n", packet_number, i, packetSize);
 							if(packet_number == i) {
 								for(uint j=0;j<packetSize-1;j++) { 
 									uint8_t b = LoRa.read(); 
 									transfer_buffer[read_pointer++] = b;    
 								}
 								ok = 1;
-								Serial.println("Right packet received");
 							} else {
-								Serial.println("packet numbers don't match somehow");
+								printf("Mismatched packet\n");
 							}
 						}
 					}
 					delay(20);
 				}
-				if(!ok) Serial.println("response timer timeout");
+				if(!ok) printf("response timer timeout\n");
 				delay(20);
 			}
-			if(!ok) Serial.println("request timer timeout");
+			if(!ok) printf("request timer timeout\n");
 		}
-		Serial.print("Loaded all packets. Read this many bytes ");
-		Serial.println(read_pointer);
+		printf("Loaded all packets, total %d\n", read_pointer);
+		print_time("lora", read_pointer, time);
 		put_to_server(transfer_buffer, read_pointer);
 
 	}

@@ -12,7 +12,7 @@
 #define BAND 915E6 // 868E6 433E6 915E6 
 #define MAX_TRANSFER_BUFFER 100000 // on these boards we have another 160KB to work with if we need it, after this
 #define LORA_TRANSFER_BUFFER 250 // has to be 254 or less
-#define PIC_EVERY_MS 60000
+#define PIC_EVERY_MS 45000
 #define SEND_REPEAT 5
 
 void takePicture();
@@ -44,8 +44,7 @@ void setup() {
 	// Malloc the transfer buffer 
 	transfer_buffer = (uint8_t *) malloc(MAX_TRANSFER_BUFFER*sizeof(uint8_t));
 	lora_buffer = (uint8_t *) malloc(LORA_TRANSFER_BUFFER*sizeof(uint8_t));
-	Serial.print("Heap after malloc: ");
-	Serial.println(ESP.getFreeHeap());
+	printf("After malloc I have %d free heap\n", ESP.getFreeHeap());
 
 	// Set up the OLED
 	Heltec.display->init();
@@ -69,27 +68,22 @@ void setup() {
 
 // Debug time taken to do things 
 void print_time(char * title, uint16_t length, long time) {
-	Serial.print(title);
-	Serial.print(": ");
-	Serial.print(length);
-	Serial.print(" bytes in ");
-	Serial.print((millis() - time) / 1000.0);
-	Serial.print(" seconds. ");
-	Serial.print((float)length / (float)(millis()-time) * 1000.0);
-	Serial.println(" bytes/second.");
+	printf("%s: %d bytes in %2.2fs. %2.2f bytes/s.\n", 
+		title, length, (millis() - time) / 1000.0, (float)length / (float)(millis()-time) * 1000.0  );
 }
+
 
 
 
 // Take a picture and load it into transfer bffer
 void takePicture() {
-	Serial.println("taking pic");
+	printf("Taking pic\n");
 	if(cam->takePicture()) {
 		delay(100);
 		uint16_t jpglen = cam->frameLength();
 		delay(100);
-		log_d("jpglen is %d\n", jpglen);
-		long time = millis();
+		printf("len of frame is %d\n", jpglen);
+		long pic_time = millis();
 		// The camera has a tiny (100 byte) buffer for transfers, so we read a bit at a time into ESP ram
 		// Takes about 20 seconds, but keeping this at 38400 as it's fiddly and that is not the slow part!
 		uint16_t idx = 0;
@@ -103,17 +97,19 @@ void takePicture() {
 				}
 				jpglen -= bytesToRead;      
 			} else {
-				log_e("problem reading data from camera -- read %d bytes\n", idx);
+				log_e("problem reading data from camera -- read %d bytes", idx);
 				delay(100);
 			}
 		}
-		print_time("camera", content_length, time);
+		print_time("camera", content_length, pic_time);
 		// Restart the camera
 		cam->resumeVideo();
 	} else {
-		Serial.println("Couldn't take pic");
+		log_e("Couldn't take pic");
 	}
 }
+uint8_t current_transfer = 0;
+long lora_time = 0;
 
 void loop() { 
 	// my loop is ... check for inbound packets a lot... but if you don't get one for 60s, take a picture
@@ -123,12 +119,11 @@ void loop() {
 		uint8_t b = LoRa.read();
 		delay(20);
 		if(a==0xF9 && b==0xFC) {
-			Serial.println("rft received");
 			delay(100);
 			uint8_t packets = content_length / LORA_TRANSFER_BUFFER;
 			if(content_length % LORA_TRANSFER_BUFFER != 0) packets++;
-			Serial.print("Content len / buffer count is ");
-			Serial.println(packets);
+			printf("RFT received. Content length is %d; buffer count %d. Packets to send is %d\n", 
+				content_length, LORA_TRANSFER_BUFFER, packets);
 			lora_buffer[0] = 0xF9;
 			lora_buffer[1] = 0xC2;
 			lora_buffer[2] = packets;
@@ -140,45 +135,39 @@ void loop() {
 				delay(20);
 			}
 			LoRa.receive();
+			lora_time = millis();
 		}
 	} else if (packetSize == 3) { // request for packet
 		uint8_t a = LoRa.read();
 		uint8_t b = LoRa.read();
 		uint8_t c = LoRa.read();
 		if(a==0xF9 && b==0xFD) {
-			Serial.print("packet was requested: ");
-			Serial.println(c);
+			current_transfer = 1;
 			uint16_t byte_start = LORA_TRANSFER_BUFFER * c;
 			uint8_t bytes_to_send = LORA_TRANSFER_BUFFER;
-			if(c == (content_length / LORA_TRANSFER_BUFFER) - 1) { // if it's last packet
-				Serial.print("last packet so ");
+
+			if(c == (content_length / LORA_TRANSFER_BUFFER)) { // if it's last packet
 				bytes_to_send = content_length % LORA_TRANSFER_BUFFER;
-				Serial.println(bytes_to_send);
+				current_transfer = 0;
+				// Done.
 			}
-			// Send the "which packet is this" guy
-			Serial.println("Sending packet");
+			printf("Packet %d was requested. byte_start is %d. content_length %d, active %d\n", 
+				c, byte_start, content_length, current_transfer);
 			lora_buffer[0] = c;
 			for(uint16_t i=byte_start;i<byte_start+bytes_to_send;i++) {
-				//printf("putting byte %d in lora_buffer position %d, c is %d bytes_to_send %d i is %d\n", 
-				//	transfer_buffer[i], i-byte_start+1, c, bytes_to_send, i);
 				lora_buffer[i-byte_start+1] = transfer_buffer[i];
 			}
-			Serial.println("filled send buffer");
 			delay(100);
 
-			uint8_t send_repeat = 1;
-			while(send_repeat-- > 0) {
-				LoRa.beginPacket();
-				LoRa.write(lora_buffer, bytes_to_send+1);
-				LoRa.endPacket();
-				Serial.println("send actual packet");
-				delay(20);
-			}
-			Serial.println("waiting around for more commands");
+			LoRa.beginPacket();
+			LoRa.write(lora_buffer, bytes_to_send+1);
+			LoRa.endPacket();
+			delay(20);
+			if(current_transfer == 0) print_time("lora", content_length, lora_time);
 			LoRa.receive();
 		} 
 	}
-	if(millis() - lastPicTime > PIC_EVERY_MS) {
+	if(!current_transfer && (millis() - lastPicTime > PIC_EVERY_MS)) {
 		lastPicTime = millis();
 		takePicture();
 	}
