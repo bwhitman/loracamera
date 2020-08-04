@@ -17,7 +17,7 @@ const char * password = WIFI_PASS ;
 const char * put_url = "http://192.168.0.3:8000/image_local.jpg";
 
 #define BAND 915E6 // 868E6 433E6 915E6 
-#define MAX_TRANSFER_BUFFER 100000 // on these boards we have another 160KB to work with if we need it, after this
+#define MAX_TRANSFER_BUFFER 65535 // on these boards we have another 200KB to work with if we need it, after this
 #define LORA_TRANSFER_BUFFER 250 // has to be 254 or less
 #define REQUEST_TIMER 200
 #define RESPONSE_TIMER 200
@@ -34,23 +34,22 @@ void setup() {
 	while(WiFi.status() != WL_CONNECTED) {
 		delay(500);
 	}
-	Serial.println("wifi online");
-	// Malloc the transfer buffer 
+
+	// Malloc the transfer buffers
 	transfer_buffer = (uint8_t *) malloc(MAX_TRANSFER_BUFFER*sizeof(uint8_t));
 	lora_buffer = (uint8_t *) malloc(LORA_TRANSFER_BUFFER*sizeof(uint8_t));
 
 	printf("After malloc I have %d free heap\n", ESP.getFreeHeap());
+
 	Heltec.display->init();
 	Heltec.display->flipScreenVertically();  
 	Heltec.display->setFont(ArialMT_Plain_10);
 	delay(1500);
 	Heltec.display->clear();
-	Heltec.display->drawString(0, 0, "Heltec.LoRa Initial success!");
-	Heltec.display->drawString(0, 10, "Wait for incoming data...");
 	Heltec.display->display();
 	delay(1000);
 
-	// Configure LoRa for receiving
+	// Configure LoRa
 	LoRa.setTxPower(20,RF_PACONFIG_PASELECT_PABOOST);
 	LoRa.setSignalBandwidth(250E3); 
 	LoRa.setSpreadingFactor(7);

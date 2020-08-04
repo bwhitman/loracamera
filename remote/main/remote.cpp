@@ -52,11 +52,9 @@ void setup() {
 	Heltec.display->setFont(ArialMT_Plain_10);
 	delay(1500);
 	Heltec.display->clear();  
-	Heltec.display->drawString(0, 0, "Heltec.LoRa Initial success!");
 	Heltec.display->display();
 	delay(1000);
 
-	// Configure LoRa for sending
 	LoRa.setTxPower(20,RF_PACONFIG_PASELECT_PABOOST);
 	LoRa.setSignalBandwidth(250E3); 
 	LoRa.setSpreadingFactor(7);
@@ -112,7 +110,7 @@ uint8_t current_transfer = 0;
 long lora_time = 0;
 
 void loop() { 
-	// my loop is ... check for inbound packets a lot... but if you don't get one for 60s, take a picture
+	// Check for inbound packets and take a pic once in a while
 	int packetSize = LoRa.parsePacket();
 	if(packetSize == 2) {
 		uint8_t a = LoRa.read();
@@ -137,22 +135,22 @@ void loop() {
 			LoRa.receive();
 			lora_time = millis();
 		}
-	} else if (packetSize == 3) { // request for packet
+	} else if (packetSize == 3) { 
 		uint8_t a = LoRa.read();
 		uint8_t b = LoRa.read();
 		uint8_t c = LoRa.read();
-		if(a==0xF9 && b==0xFD) {
-			current_transfer = 1;
+		if(a==0xF9 && b==0xFD) { // request for packet
+			current_transfer = 1; // tell the camera to stop taking pictures
 			uint16_t byte_start = LORA_TRANSFER_BUFFER * c;
 			uint8_t bytes_to_send = LORA_TRANSFER_BUFFER;
 
 			if(c == (content_length / LORA_TRANSFER_BUFFER)) { // if it's last packet
 				bytes_to_send = content_length % LORA_TRANSFER_BUFFER;
-				current_transfer = 0;
-				// Done.
+				current_transfer = 0; // We're done
 			}
 			printf("Packet %d was requested. byte_start is %d. content_length %d, active %d\n", 
 				c, byte_start, content_length, current_transfer);
+
 			lora_buffer[0] = c;
 			for(uint16_t i=byte_start;i<byte_start+bytes_to_send;i++) {
 				lora_buffer[i-byte_start+1] = transfer_buffer[i];
