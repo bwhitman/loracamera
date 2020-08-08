@@ -8,12 +8,25 @@
 #include <pins_arduino.h>
 #include <heltec.h>
 #include <Adafruit_VC0706.h>
+#include "driver/i2s.h"
+
+#define SAMPLE_RATE 11025
 
 #define BAND 915E6 // 868E6 433E6 915E6 
 #define MAX_TRANSFER_BUFFER 100000 // on these boards we have another 160KB to work with if we need it, after this
 #define LORA_TRANSFER_BUFFER 250 // has to be 254 or less
-#define PIC_EVERY_MS 45000
+#define PIC_EVERY_MS 90000
 #define SEND_REPEAT 5
+#define AUDIO_SECONDS 2
+#define AUDIO_BUF_SIZE (SAMPLE_RATE*AUDIO_SECONDS)
+#define AUDIO_FRAME_SIZE 1024
+
+// Pins
+#define CAMERATX_BOARDRX 23
+#define CAMERARX_BOARDTX 17
+#define I2S_BCK 13
+#define I2S_LRC 12
+#define I2S_DIN 39 // DOUT from I2S mic
 
 void takePicture();
 
@@ -24,12 +37,64 @@ uint8_t * lora_buffer;
 uint16_t content_length = 0;
 long lastPicTime = 0;
 
+uint8_t audio_buf[AUDIO_BUF_SIZE];
+uint32_t audio_pointer = 0;
+
+uint8_t current_transfer = 0;
+long lora_time = 0;
+
+//i2s configuration
+i2s_config_t i2s_config = {
+     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+     .sample_rate = SAMPLE_RATE,
+     .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
+     .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT, 
+     .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
+     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1, // high interrupt priority
+     .dma_buf_count = 4,
+     .dma_buf_len = AUDIO_FRAME_SIZE,
+     .use_apll = false,
+     .tx_desc_auto_clear = false,
+     .fixed_mclk = 0,   //Interrupt level 1
+    };
+    
+i2s_pin_config_t pin_config = {
+    .bck_io_num = I2S_BCK,
+    .ws_io_num = I2S_LRC, 
+    .data_out_num = -1, // not used //27, // this is DIN 
+    .data_in_num = I2S_DIN,
+};
+
+void setup_i2s(void) {
+	pinMode(I2S_DIN, INPUT);
+	pinMode(I2S_BCK, OUTPUT);
+	pinMode(I2S_LRC, OUTPUT);
+	i2s_driver_install((i2s_port_t)I2S_NUM_0, &i2s_config, 0, NULL);
+	i2s_set_pin((i2s_port_t)I2S_NUM_0, &pin_config);
+	i2s_set_sample_rates((i2s_port_t)I2S_NUM_0, SAMPLE_RATE);
+	i2s_start(I2S_NUM_0);
+}
+
+
+void read_audio(void) {
+	uint32_t bytes_read = 0;
+	int32_t small_buf[AUDIO_FRAME_SIZE];
+	i2s_read((i2s_port_t)I2S_NUM_0, small_buf, AUDIO_FRAME_SIZE, &bytes_read, portMAX_DELAY );
+	for(uint32_t i=0;i<(bytes_read/4);i++) { //2 for 16 bit, /2 for stereo only need left 
+		int32_t sample = small_buf[i];
+		sample = sample >> 24;
+		sample = sample + 127;
+		audio_buf[audio_pointer++] = (uint8_t) sample; 
+		if(audio_pointer == AUDIO_BUF_SIZE) audio_pointer = 0;
+	}
+}
+
 void setup() {
+	setup_i2s();
 	Heltec.begin(true /*Display */, true /* LoRa */, true /* Serial */, true /* PABOOST */, BAND);
 
 	// Set up the camera.  
-	// purple on 17, grey on 23, blue on 5V, white on GN
-	Serial1.begin(38400,SERIAL_8N1, 23, 17);
+	Serial1.begin(38400,SERIAL_8N1, CAMERATX_BOARDRX, CAMERARX_BOARDTX);
 	cam = new Adafruit_VC0706(&Serial1);
 	int t = cam->reset();
 	log_d("reset said %d\n", t);
@@ -61,7 +126,10 @@ void setup() {
 
 	// take a first picture
 	lastPicTime = millis();
-	takePicture();
+	//takePicture();
+
+	content_length = AUDIO_BUF_SIZE; // for now
+	transfer_buffer = audio_buf;
 }
 
 // Debug time taken to do things 
@@ -106,12 +174,11 @@ void takePicture() {
 		log_e("Couldn't take pic");
 	}
 }
-uint8_t current_transfer = 0;
-long lora_time = 0;
 
 void loop() { 
 	// Check for inbound packets and take a pic once in a while
 	int packetSize = LoRa.parsePacket();
+	if(!current_transfer) read_audio();
 	if(packetSize == 2) {
 		uint8_t a = LoRa.read();
 		uint8_t b = LoRa.read();
@@ -166,8 +233,8 @@ void loop() {
 		} 
 	}
 	if(!current_transfer && (millis() - lastPicTime > PIC_EVERY_MS)) {
-		lastPicTime = millis();
-		takePicture();
+		//lastPicTime = millis();
+		//takePicture();
 	}
 	delay(20);
 

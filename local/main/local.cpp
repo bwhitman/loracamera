@@ -21,7 +21,7 @@ const char * put_url = "http://192.168.0.3:8000/image_local.jpg";
 #define LORA_TRANSFER_BUFFER 250 // has to be 254 or less
 #define REQUEST_TIMER 200
 #define RESPONSE_TIMER 200
-#define CHECK_EVERY_MS 45000
+#define CHECK_EVERY_MS 10000
 unsigned int counter = 0;
 uint8_t * transfer_buffer;
 uint8_t * lora_buffer;
@@ -166,6 +166,8 @@ void loop() {
 		printf("Loaded all packets, total %d\n", read_pointer);
 		print_time("lora", read_pointer, time);
 		put_to_server(transfer_buffer, read_pointer);
+		lastCheckTime = millis();
+
 
 	}
 	delay(10);

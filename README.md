@@ -1,10 +1,12 @@
 # loracamera
 
-transmit sound &amp; image over a 915MHz LoRa link to a base station near your wifi. Currently set up to a send a frame from a serial TTL camera, but can be adapted for most data you want to send using LoRa directly. 
+transmit sound &amp; image over a 915MHz LoRa link to a base station near your wifi. Currently set up to a send a frame from a serial TTL camera and a few seconds of sound from a microphone, but can be adapted for most data you want to send using LoRa directly. 
 
 I'm using two of the [Heltec WiFi LoRa 32 v2](https://heltec.org/project/wifi-lora-32/), readily available on amazon etc. I'm able to get about 1km in range in a dense wooded place from this setup.
 
 The camera I'm using is [this one from Adafruit](https://www.adafruit.com/product/613), but I'm looking for better options. The library is very fiddly, I had to slow down a bunch of serial calls to get it going on an ESP32, and the camera quality is low. 
+
+I'm using [this MEMS i2s microphone](https://www.adafruit.com/product/3421) as well. 
 
 `local`: esp-idf project for the device near a wifi link 
 
