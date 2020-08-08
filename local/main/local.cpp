@@ -30,7 +30,7 @@ unsigned int counter = 0;
 #define PICTURE 0
 
 long lastCheckTime = 0;
-uint8_t content_type = AUDIO;
+uint8_t content_type = PICTURE;
 
 uint8_t transfer_buffer[MAX_TRANSFER_BUFFER];
 uint8_t lora_buffer[LORA_TRANSFER_BUFFER];
@@ -112,17 +112,17 @@ void request_packet(uint16_t packet_number) {
 uint16_t request_transmission() {
 	uint8_t request_timer = REQUEST_TIMER;
 	while(request_timer-- > 0) {
-		uint8_t response_timer = RESPONSE_TIMER;
 		lora_buffer[0] = 0xF9;
 		lora_buffer[1] = 0xFC + content_type;
 		printf("Sending request for transmission of type %d...\n", content_type);
 		LoRa.beginPacket();
 		LoRa.write(lora_buffer, 2);
 		LoRa.endPacket();
-		// This is gross but otherwise the response will time out 
-		if(content_type == AUDIO) { delay(AUDIO_SECONDS*1000); } else { delay(6500); }
+
+		// Wait for either audio or picture to capture
+		long wfr_time = millis();
 		LoRa.receive();
-		while(response_timer-- > 0) {
+		while(millis() - wfr_time < 30000) {
 			int packetSize = LoRa.parsePacket();
 			if(packetSize==4) {
 				uint8_t a = LoRa.read();
@@ -141,6 +141,22 @@ uint16_t request_transmission() {
 	}
 	printf("Request timer timed out\n");
 	return 0;
+}
+
+void update_status(uint16_t packet_number, uint16_t packets, int rssi) {
+	char message[255];
+	sprintf(message, "%d / %d [%2.2f%%]", 
+		packet_number, packets, ((float)packet_number/packets)*100.0f);
+
+	Heltec.display->clear();
+	Heltec.display->setFont(ArialMT_Plain_10);
+	Heltec.display->drawString(0, 0, message);
+	printf(message);
+	sprintf(message, " rssi: %d\n", rssi);
+	Heltec.display->drawString(0, 15, message);
+	Heltec.display->display();
+	printf(message);
+
 }
 
 void handle_packets(uint16_t packets) {
@@ -164,14 +180,13 @@ void handle_packets(uint16_t packets) {
 						printf("got magic packet, discarding\n");
 						delay(20);
 					} else {
-						printf("Response: packet #%d(%d) / #%d [%2.2f%%], size %d\n", 
-							packet_number, i, packets, ((float)packet_number/packets)*100.0f, packetSize);
 						if(packet_number == i) {
 							for(uint j=0;j<packetSize-2;j++) { 
 								uint8_t b = LoRa.read(); 
 								transfer_buffer[read_pointer++] = b;    
 							}
 							ok = 1;
+							update_status(packet_number, packets, LoRa.packetRssi());
 						} else {
 							printf("Mismatched packet\n");
 						}
@@ -197,6 +212,7 @@ void loop() {
 		packets = request_transmission();
 	}
 	if(packets) {
+		printf("if packets! %d\n", packets);
 		handle_packets(packets);
 		lastCheckTime = millis();
 		if(content_type == AUDIO) { content_type = PICTURE; } else { content_type = AUDIO; } // flip type

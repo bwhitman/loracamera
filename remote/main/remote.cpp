@@ -92,31 +92,23 @@ void read_audio(void) {
 
 void setup() {
 	setup_i2s();
-	Heltec.begin(true /*Display */, true /* LoRa */, true /* Serial */, true /* PABOOST */, BAND);
+	Heltec.begin(false /*Display */, true /* LoRa */, true /* Serial */, true /* PABOOST */, BAND);
 
 	// Set up the camera.  
+	digitalWrite(21, LOW); 
 	Serial1.begin(38400,SERIAL_8N1, CAMERATX_BOARDRX, CAMERARX_BOARDTX);
 	cam = new Adafruit_VC0706(&Serial1);
 	int t = cam->reset();
-	log_d("reset said %d\n", t);
+	printf("Camera reset said %d\n", t);
 	delay(100);
 	char * version = cam->getVersion();
-
-	log_d("-- %s --\n", version);
+	printf("Camera version string: %s", version);
 	delay(100);
 	cam->setImageSize(VC0706_640x480); 
 	delay(100);
 
 	printf("I have %d free heap\n", ESP.getFreeHeap());
 
-	// Set up the OLED
-	Heltec.display->init();
-	Heltec.display->flipScreenVertically();  
-	Heltec.display->setFont(ArialMT_Plain_10);
-	delay(1500);
-	Heltec.display->clear();  
-	Heltec.display->display();
-	delay(1000);
 
 	LoRa.setTxPower(20,RF_PACONFIG_PASELECT_PABOOST);
 	LoRa.setSignalBandwidth(250E3); 
@@ -146,6 +138,9 @@ void recordAudio() {
 // Take a picture and load it into transfer bffer
 void takePicture() {
 	printf("Taking pic\n");
+	// Restart the camera
+	cam->resumeVideo();
+	delay(1000);
 	if(cam->takePicture()) {
 		delay(100);
 		uint32_t jpglen = cam->frameLength();
@@ -170,9 +165,8 @@ void takePicture() {
 			}
 		}
 		print_time("camera", content_length, pic_time);
-		// Restart the camera
-		cam->resumeVideo();
 	} else {
+		content_length = 0;
 		log_e("Couldn't take pic");
 	}
 }
@@ -213,6 +207,7 @@ void loop() {
 
 			LoRa.receive();
 			lora_time = millis();
+			current_transfer = 1;
 		}
 	} else if (packetSize == 4) { 
 		uint8_t a = LoRa.read();
@@ -221,7 +216,6 @@ void loop() {
 		uint8_t d = LoRa.read();
 		uint16_t cd = u(c,d);
 		if(a==0xF9 && b==0xFE) { // request for packet
-			current_transfer = 1; // we are in a transfer
 			uint32_t byte_start = LORA_TRANSFER_BUFFER * cd;
 			uint8_t bytes_to_send = LORA_TRANSFER_BUFFER;
 
