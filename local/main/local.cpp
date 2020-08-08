@@ -11,21 +11,37 @@
 #include "HTTPClient.h"
 
 // Wifi details & server for uploads
+#define SERVER_URL "http://192.168.0.3:8000"
 #include "auth.h"
 const char * ssid = WIFI_SSID ;
 const char * password = WIFI_PASS ;
-const char * put_url = "http://192.168.0.3:8000/image_local.jpg";
 
 #define BAND 915E6 // 868E6 433E6 915E6 
-#define MAX_TRANSFER_BUFFER 65535 // on these boards we have another 200KB to work with if we need it, after this
-#define LORA_TRANSFER_BUFFER 250 // has to be 254 or less
+#define MAX_TRANSFER_BUFFER 125000 
+#define LORA_TRANSFER_BUFFER 250 
 #define REQUEST_TIMER 200
 #define RESPONSE_TIMER 200
 #define CHECK_EVERY_MS 10000
-unsigned int counter = 0;
-uint8_t * transfer_buffer;
-uint8_t * lora_buffer;
+#define AUDIO_SECONDS 5
 
+unsigned int counter = 0;
+
+#define AUDIO 1
+#define PICTURE 0
+
+long lastCheckTime = 0;
+uint8_t content_type = AUDIO;
+
+uint8_t transfer_buffer[MAX_TRANSFER_BUFFER];
+//uint8_t transfer_buffer_bank1[100000];
+
+uint8_t lora_buffer[LORA_TRANSFER_BUFFER];
+
+
+// unsigned int packing functions
+uint8_t u0(uint16_t in) { return (in & 0xFF); }
+uint8_t u1(uint16_t in) { return (in >> 8); }
+uint16_t u(uint8_t a, uint8_t b) { uint16_t n = b; n = n << 8; n = n | a; return n; }
 
 void setup() { 
 	Heltec.begin(true /*Display */, true /* LoRa */, true /* Serial */, true /* PABOOST */, BAND);
@@ -35,11 +51,8 @@ void setup() {
 		delay(500);
 	}
 
-	// Malloc the transfer buffers
-	transfer_buffer = (uint8_t *) malloc(MAX_TRANSFER_BUFFER*sizeof(uint8_t));
-	lora_buffer = (uint8_t *) malloc(LORA_TRANSFER_BUFFER*sizeof(uint8_t));
 
-	printf("After malloc I have %d free heap\n", ESP.getFreeHeap());
+	printf("I have %d free heap\n", ESP.getFreeHeap());
 
 	Heltec.display->init();
 	Heltec.display->flipScreenVertically();  
@@ -57,16 +70,26 @@ void setup() {
 }
 
 // Debug time taken to do things 
-void print_time(char * title, uint16_t length, long time) {
+void print_time(char * title, uint32_t length, long time) {
 	printf("%s: %d bytes in %2.2fs. %2.2f bytes/s.\n", 
 		title, length, (millis() - time) / 1000.0, (float)length / (float)(millis()-time) * 1000.0  );
 }
 
-void put_to_server(uint8_t * buf, uint16_t length) {
+
+void put_to_server(uint8_t * buf, uint32_t length) {
+	char put_url[255];
 	HTTPClient http;
 	long time = millis();
-	http.begin(put_url);
-	http.addHeader("Content-Type", "image/jpg");
+
+	if(content_type == AUDIO) {
+		sprintf(put_url, "%s/audio.raw", SERVER_URL);
+		http.begin(put_url);
+		http.addHeader("Content-Type", "audio/L8");
+	} else {
+		sprintf(put_url, "%s/image.jpg", SERVER_URL);
+		http.begin(put_url);
+		http.addHeader("Content-Type", "image/jpg");		
+	}
 	http.addHeader("Content-Length", String(length));
 	http.PUT(buf,length); 
 	http.end();
@@ -74,39 +97,44 @@ void put_to_server(uint8_t * buf, uint16_t length) {
 }
 
 // request a particular packet
-void request_packet(uint8_t packet_number) {
+void request_packet(uint16_t packet_number) {
 	lora_buffer[0] = 0xF9;
-	lora_buffer[1] = 0xFD;
-	lora_buffer[2] = packet_number;
+	lora_buffer[1] = 0xFE;
+	lora_buffer[2] = u0(packet_number);
+	lora_buffer[3] = u1(packet_number);
 	LoRa.beginPacket();
-	LoRa.write(lora_buffer, 3);
+	LoRa.write(lora_buffer, 4);
 	LoRa.endPacket();
 	delay(20);
 	LoRa.receive();
 }
 
 // say, how many packets you got for me
-uint8_t request_transmission() {
+// type == 0 for image, 1 for audio
+uint16_t request_transmission() {
 	uint8_t request_timer = REQUEST_TIMER;
 	while(request_timer-- > 0) {
 		uint8_t response_timer = RESPONSE_TIMER;
 		lora_buffer[0] = 0xF9;
-		lora_buffer[1] = 0xFC;
-		printf("Sending request for transmission...\n");
+		lora_buffer[1] = 0xFC + content_type;
+		printf("Sending request for transmission of type %d...\n", content_type);
 		LoRa.beginPacket();
 		LoRa.write(lora_buffer, 2);
 		LoRa.endPacket();
-		delay(20);
+		// This is gross but otherwise the response will time out 
+		if(content_type == AUDIO) { delay(AUDIO_SECONDS*1000); } else { delay(6500); }
 		LoRa.receive();
 		while(response_timer-- > 0) {
 			int packetSize = LoRa.parsePacket();
-			if(packetSize==3) {
+			if(packetSize==4) {
 				uint8_t a = LoRa.read();
 				uint8_t b = LoRa.read();
 				uint8_t c = LoRa.read();
+				uint8_t d = LoRa.read();
+				uint16_t cd = u(c, d);
 				if(a == 0xF9 && b == 0xC2) {
-					printf("Receiving rft response, %d packets\n", c);
-					return c;
+					printf("Receiving rft response, %d packets\n", cd);
+					return cd;
 				}
 			}
 			delay(20);
@@ -117,58 +145,62 @@ uint8_t request_transmission() {
 	return 0;
 }
 
+void handle_packets(uint16_t packets) {
+	uint32_t read_pointer = 0;
+	long time = millis();
+	printf("Got back %d packets from the rft\n", packets);
+	for(uint16_t i=0;i<packets;i++) {
+		uint8_t request_timer = REQUEST_TIMER;
+		uint8_t ok = 0;
+		while(request_timer-- > 0 && !ok) {
+			delay(100); // delay 100ms between packet requests
+			request_packet(i);
+			uint8_t response_timer = RESPONSE_TIMER;
+			while(response_timer-- > 0 && !ok) {
+				int packetSize = LoRa.parsePacket();
+				if(packetSize) {
+					uint8_t a = LoRa.read();
+					uint8_t b = LoRa.read();
+					uint16_t packet_number = u(a, b);
+					if(a == 0xF9 && packetSize < 5) {
+						printf("got magic packet, discarding\n");
+						delay(20);
+					} else {
+						printf("Response: packet #%d (asked for %d), size %d\n", packet_number, i, packetSize);
+						if(packet_number == i) {
+							for(uint j=0;j<packetSize-2;j++) { 
+								uint8_t b = LoRa.read(); 
+								transfer_buffer[read_pointer++] = b;    
+							}
+							ok = 1;
+						} else {
+							printf("Mismatched packet\n");
+						}
+					}
+				}
+				delay(20);
+			}
+			if(!ok) printf("response timer timeout\n");
+			delay(20);
+		}
+		if(!ok) printf("request timer timeout\n");
+	}
+	printf("Loaded all packets, total %d\n", read_pointer);
+	print_time("lora", read_pointer, time);
+	put_to_server(transfer_buffer, read_pointer);
+}
 
-long lastCheckTime = 0;
+
 void loop() {
-	uint8_t packets = 0;
+	uint16_t packets = 0;
 	if(millis() - lastCheckTime > CHECK_EVERY_MS) {
 		lastCheckTime = millis();
 		packets = request_transmission();
 	}
 	if(packets) {
-		uint16_t read_pointer = 0;
-		long time = millis();
-		printf("Got back %d packets from the rft\n", packets);
-		for(uint8_t i=0;i<packets;i++) {
-			uint8_t request_timer = REQUEST_TIMER;
-			uint8_t ok = 0;
-			while(request_timer-- > 0 && !ok) {
-				delay(100); // delay 100ms between packet requests
-				request_packet(i);
-				uint8_t response_timer = RESPONSE_TIMER;
-				while(response_timer-- > 0 && !ok) {
-					int packetSize = LoRa.parsePacket();
-					if(packetSize) {
-						uint8_t packet_number = LoRa.read();
-						if(packet_number == 0xF9 && packetSize < 4) {
-							printf("got magic packet, discarding\n");
-							delay(20);
-						} else {
-							printf("Response: packet #%d (asked for %d), size %d\n", packet_number, i, packetSize);
-							if(packet_number == i) {
-								for(uint j=0;j<packetSize-1;j++) { 
-									uint8_t b = LoRa.read(); 
-									transfer_buffer[read_pointer++] = b;    
-								}
-								ok = 1;
-							} else {
-								printf("Mismatched packet\n");
-							}
-						}
-					}
-					delay(20);
-				}
-				if(!ok) printf("response timer timeout\n");
-				delay(20);
-			}
-			if(!ok) printf("request timer timeout\n");
-		}
-		printf("Loaded all packets, total %d\n", read_pointer);
-		print_time("lora", read_pointer, time);
-		put_to_server(transfer_buffer, read_pointer);
+		handle_packets(packets);
 		lastCheckTime = millis();
-
-
+		//if(content_type == AUDIO) { content_type = PICTURE; } else { content_type = AUDIO; } // flip type
 	}
 	delay(10);
 }

@@ -57,6 +57,7 @@ remote/build/
 local/main/auth.h
 remote/main/auth.h
 *.jpg
+audio.raw
 
 
 
