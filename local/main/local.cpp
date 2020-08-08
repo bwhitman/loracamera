@@ -33,8 +33,6 @@ long lastCheckTime = 0;
 uint8_t content_type = AUDIO;
 
 uint8_t transfer_buffer[MAX_TRANSFER_BUFFER];
-//uint8_t transfer_buffer_bank1[100000];
-
 uint8_t lora_buffer[LORA_TRANSFER_BUFFER];
 
 
@@ -166,7 +164,8 @@ void handle_packets(uint16_t packets) {
 						printf("got magic packet, discarding\n");
 						delay(20);
 					} else {
-						printf("Response: packet #%d (asked for %d), size %d\n", packet_number, i, packetSize);
+						printf("Response: packet #%d(%d) / #%d [%2.2f%%], size %d\n", 
+							packet_number, i, packets, ((float)packet_number/packets)*100.0f, packetSize);
 						if(packet_number == i) {
 							for(uint j=0;j<packetSize-2;j++) { 
 								uint8_t b = LoRa.read(); 
@@ -200,7 +199,7 @@ void loop() {
 	if(packets) {
 		handle_packets(packets);
 		lastCheckTime = millis();
-		//if(content_type == AUDIO) { content_type = PICTURE; } else { content_type = AUDIO; } // flip type
+		if(content_type == AUDIO) { content_type = PICTURE; } else { content_type = AUDIO; } // flip type
 	}
 	delay(10);
 }

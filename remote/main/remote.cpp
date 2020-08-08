@@ -104,7 +104,7 @@ void setup() {
 
 	log_d("-- %s --\n", version);
 	delay(100);
-	cam->setImageSize(VC0706_320x240); 
+	cam->setImageSize(VC0706_640x480); 
 	delay(100);
 
 	printf("I have %d free heap\n", ESP.getFreeHeap());
