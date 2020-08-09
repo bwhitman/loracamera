@@ -11,7 +11,7 @@ __Note__: curl automatically appends the filename onto the end of the URL so
 the path can be omitted.
 
 """
-import os
+import os, datetime
 try:
     import http.server as server
 except ImportError:
@@ -22,16 +22,8 @@ class HTTPRequestHandler(server.SimpleHTTPRequestHandler):
     """Extend SimpleHTTPRequestHandler to handle PUT requests"""
     def do_PUT(self):
         """Save a file following a HTTP PUT request"""
-        filename = os.path.basename(self.path)
-
-        # Don't overwrite files
-        #if os.path.exists(filename):
-        #    self.send_response(409, 'Conflict')
-        #    self.end_headers()
-        #    reply_body = '"%s" already exists\n' % filename
-        #    self.wfile.write(reply_body.encode('utf-8'))
-        #    return
-
+        n = datetime.datetime.now()
+        filename = "%02d%02d%02d%02d.%s" % (n.month, n.day, n.hour, n.minute, self.path[-3:])
         file_length = int(self.headers['Content-Length'])
         with open(filename, 'wb') as output_file:
             output_file.write(self.rfile.read(file_length))

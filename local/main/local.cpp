@@ -22,6 +22,8 @@ const char * password = WIFI_PASS ;
 #define REQUEST_TIMER 200
 #define RESPONSE_TIMER 200
 #define CHECK_EVERY_MS 10000
+// The max the remote device will take to acquire image / audio
+#define MAX_RFT_RESPONSE_MS 30000
 #define AUDIO_SECONDS 5
 
 unsigned int counter = 0;
@@ -32,6 +34,7 @@ unsigned int counter = 0;
 long lastCheckTime = 0;
 uint8_t content_type = PICTURE;
 
+// TODO -- bank this so that we can have more room
 uint8_t transfer_buffer[MAX_TRANSFER_BUFFER];
 uint8_t lora_buffer[LORA_TRANSFER_BUFFER];
 
@@ -122,7 +125,7 @@ uint16_t request_transmission() {
 		// Wait for either audio or picture to capture
 		long wfr_time = millis();
 		LoRa.receive();
-		while(millis() - wfr_time < 30000) {
+		while(millis() - wfr_time < MAX_RFT_RESPONSE_MS) {
 			int packetSize = LoRa.parsePacket();
 			if(packetSize==4) {
 				uint8_t a = LoRa.read();
