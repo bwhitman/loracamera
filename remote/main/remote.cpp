@@ -37,9 +37,6 @@ uint8_t lora_buffer[LORA_TRANSFER_BUFFER];
 uint32_t content_length = 0;
 uint32_t audio_pointer = 0;
 
-uint8_t current_transfer = 0;
-long lora_time = 0;
-
 // unsigned int packing functions
 uint8_t u0(uint16_t in) { return (in & 0xFF); }
 uint8_t u1(uint16_t in) { return (in >> 8); }
@@ -173,22 +170,21 @@ void takePicture() {
 
 
 void loop() { 
-	// Check for inbound packets and take a pic once in a while
+	// Check for inbound packets and respond to them
 	int packetSize = LoRa.parsePacket();
-	if(packetSize == 2) {
+	if(packetSize == 2) { // probably a request for transmission
 		uint8_t a = LoRa.read();
 		uint8_t b = LoRa.read();
 		delay(20);
-		if(a==0xF9 && (b==0xFC || b==0xFD)) { // request for start
-			// Both of these take 5-10 seconds to do
+		if(a==0xF9 && (b==0xFC || b==0xFD)) { 
 			// Both load into transfer_buffer, both set content_length
-
+			// both these take multiple seconds to complete, the local is waiting here
 			if(b==0xFC) { // take picture
 				takePicture();
 			} else { // record audio
 				recordAudio();
 			}
-
+			// Now respond to the RFT with the # of packets to expect
 			uint16_t packets = content_length / LORA_TRANSFER_BUFFER;
 			if(content_length % LORA_TRANSFER_BUFFER != 0) packets++;
 			printf("RFT received. Content length is %d; buffer count %d. Packets to send is %d\n", 
@@ -206,25 +202,22 @@ void loop() {
 			}
 
 			LoRa.receive();
-			lora_time = millis();
-			current_transfer = 1;
 		}
-	} else if (packetSize == 4) { 
+	} else if (packetSize == 4) {  // probably a request for packet
 		uint8_t a = LoRa.read();
 		uint8_t b = LoRa.read();
 		uint8_t c = LoRa.read();
 		uint8_t d = LoRa.read();
-		uint16_t cd = u(c,d);
+		uint16_t cd = u(c,d); // cd is the # of the packet they want
 		if(a==0xF9 && b==0xFE) { // request for packet
 			uint32_t byte_start = LORA_TRANSFER_BUFFER * cd;
 			uint8_t bytes_to_send = LORA_TRANSFER_BUFFER;
 
 			if(cd == (content_length / LORA_TRANSFER_BUFFER)) { // if it's last packet
 				bytes_to_send = content_length % LORA_TRANSFER_BUFFER;
-				current_transfer = 0; // We're done
 			}
-			printf("Packet %d was requested. byte_start is %d. content_length %d, active %d\n", 
-				cd, byte_start, content_length, current_transfer);
+			printf("Packet %d was requested. byte_start is %d. content_length %d\n", 
+				cd, byte_start, content_length);
 
 			lora_buffer[0] = u0(cd);
 			lora_buffer[1] = u1(cd);
@@ -238,7 +231,6 @@ void loop() {
 			LoRa.write(lora_buffer, bytes_to_send+2);
 			LoRa.endPacket();
 			delay(20);
-			if(current_transfer == 0) print_time("lora", content_length, lora_time);
 			LoRa.receive();
 		} 
 	}
