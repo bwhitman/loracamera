@@ -11,7 +11,7 @@
 #include "HTTPClient.h"
 
 // Wifi details & server for uploads
-#define SERVER_URL "http://192.168.0.3:8000"
+#define SERVER_URL "http://192.168.0.150:8000"
 #include "auth.h"
 const char * ssid = WIFI_SSID ;
 const char * password = WIFI_PASS ;
@@ -44,8 +44,12 @@ uint8_t u0(uint16_t in) { return (in & 0xFF); }
 uint8_t u1(uint16_t in) { return (in >> 8); }
 uint16_t u(uint8_t a, uint8_t b) { uint16_t n = b; n = n << 8; n = n | a; return n; }
 
+
+
 void setup() { 
+
 	Heltec.begin(true /*Display */, true /* LoRa */, true /* Serial */, true /* PABOOST */, BAND);
+
 	// Set up WIFI 
 	WiFi.begin(ssid, password);
 	while(WiFi.status() != WL_CONNECTED) {
@@ -68,6 +72,8 @@ void setup() {
 	LoRa.setSignalBandwidth(250E3); 
 	LoRa.setSpreadingFactor(7);
 	LoRa.receive();
+
+
 }
 
 // Debug time taken to do things 
@@ -209,6 +215,7 @@ void handle_packets(uint16_t packets) {
 
 
 void loop() {
+	
 	uint16_t packets = 0;
 	if(millis() - lastCheckTime > CHECK_EVERY_MS) {
 		lastCheckTime = millis();
@@ -221,6 +228,9 @@ void loop() {
 		if(content_type == AUDIO) { content_type = PICTURE; } else { content_type = AUDIO; } // flip type
 	}
 	delay(10);
+	
+
+
 }
 
 

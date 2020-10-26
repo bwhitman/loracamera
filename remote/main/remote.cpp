@@ -10,6 +10,9 @@
 #include <Adafruit_VC0706.h>
 #include "driver/i2s.h"
 
+
+
+
 #define BAND 915E6 // 868E6 433E6 915E6 
 
 #define MAX_TRANSFER_BUFFER 125000 
@@ -28,9 +31,10 @@
 #define I2S_BCK 13
 #define I2S_LRC 12
 #define I2S_DIN 39 // DOUT from I2S mic
-
+#define CAMERA_ONOFF 2
 
 Adafruit_VC0706 * cam;
+
 uint8_t transfer_buffer[MAX_TRANSFER_BUFFER];
 uint8_t lora_buffer[LORA_TRANSFER_BUFFER];
 
@@ -87,22 +91,36 @@ void read_audio(void) {
 	}
 }
 
+void turnOnCamera() {
+	digitalWrite(CAMERA_ONOFF, HIGH); 
+	delay(1000);
+	int t = cam->reset();
+	printf("Turning on camera; reset with %d\n", t);
+	delay(100);
+	char * version = cam->getVersion();
+	//printf("Camera version string: %s", version);
+	delay(100);
+	cam->setImageSize(VC0706_640x480); 
+	delay(100);
+}
+
+void turnOffCamera() {
+	printf("Turning off camera\n");
+	digitalWrite(CAMERA_ONOFF, LOW); 
+	delay(1000);
+}
+
+
+
 void setup() {
 	setup_i2s();
 	Heltec.begin(false /*Display */, true /* LoRa */, true /* Serial */, true /* PABOOST */, BAND);
 
 	// Set up the camera.  
-	digitalWrite(21, LOW); 
+	pinMode(CAMERA_ONOFF, OUTPUT);
 	Serial1.begin(38400,SERIAL_8N1, CAMERATX_BOARDRX, CAMERARX_BOARDTX);
 	cam = new Adafruit_VC0706(&Serial1);
-	int t = cam->reset();
-	printf("Camera reset said %d\n", t);
-	delay(100);
-	char * version = cam->getVersion();
-	printf("Camera version string: %s", version);
-	delay(100);
-	cam->setImageSize(VC0706_640x480); 
-	delay(100);
+
 
 	printf("I have %d free heap\n", ESP.getFreeHeap());
 
@@ -134,6 +152,7 @@ void recordAudio() {
 
 // Take a picture and load it into transfer bffer
 void takePicture() {
+	turnOnCamera();
 	printf("Taking pic\n");
 	// Restart the camera
 	cam->resumeVideo();
@@ -166,6 +185,7 @@ void takePicture() {
 		content_length = 0;
 		log_e("Couldn't take pic");
 	}
+	turnOffCamera();
 }
 
 

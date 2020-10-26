@@ -1,5 +1,5 @@
 
-SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -Wno-narrowing -Wno-write-strings")
+SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -Wno-narrowing -Wno-write-strings -Wno-maybe-uninitialized")
 
 
 idf_component_register(SRCS 
@@ -15,4 +15,5 @@ idf_component_register(SRCS
                     			heltec
                     			VC0706
                     			heltec/lora
-                    			heltec/oled)
+                    			heltec/oled
+                    			)
